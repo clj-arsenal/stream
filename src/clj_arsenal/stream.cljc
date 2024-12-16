@@ -159,14 +159,15 @@
 
 (defn- stream-ref-deref
   [^StreamRef stream-ref]
-  (or (get-in @(.-!state stream-ref) [::stream-states (.-k stream-ref) ::value])
-    (when-some [snap-fn (::snap (.-config stream-ref))]
-      (snap-fn))))
+  (let [value (get-in @(.-!state stream-ref) [::stream-states (.-k stream-ref) ::value] ::not-found)]
+    (if (not= value ::not-found)
+      value
+      (when-some [snap-fn (::snap (.-config stream-ref))]
+        (snap-fn)))))
 
 (defn- prepare-flush-secondary
   [state opts]
   (let [equiv-fn (or (:equiv-fn opts) identical?)
-        extra-lives (or (:extra-lives opts) 2)
         dirty-streams (persistent!
                         (reduce-kv
                           (fn [m k v]
