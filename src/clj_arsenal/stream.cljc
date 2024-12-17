@@ -4,7 +4,8 @@
    [clj-arsenal.basis.protocols.dispose :refer [Dispose dispose!]]
    [clj-arsenal.log :refer [log spy]]
    [clj-arsenal.check :refer [check expect when-check]]
-   #?(:cljd [cljd.core :refer [IWatchable IEquiv IHash IDeref IFn]]))
+   #?@(:cljd [[cljd.core :refer [IWatchable IEquiv IHash IDeref IFn]]
+              [cljd.flutter :refer [Subscribable]]]))
   (:import
    #?@(:cljd
        []
@@ -47,7 +48,8 @@
        
        IDeref
        (-deref
-         [this])]
+         [this]
+         (stream-ref-deref this))]
 
       :cljd
       [IWatchable
@@ -60,6 +62,19 @@
        (-remove-watch
          [this k]
          (remove-watch! this k))
+
+       Subscribable
+       (-subscribe
+         [this push!]
+         (let [watch-key (gensym)]
+           (add-watch this watch-key (fn [_ _ _ v] (push! v)))
+           watch-key))
+       (-call-with-immediate-value
+         [this sub f!]
+         (f! @this))
+       (-unsubscribe
+         [this sub]
+         (remove-watch this sub))
        
        IEquiv
        (-equiv
