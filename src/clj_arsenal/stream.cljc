@@ -71,7 +71,8 @@
            watch-key))
        (-call-with-immediate-value
          [this sub f!]
-         (f! @this))
+         (f! @this)
+         true)
        (-unsubscribe
          [this sub]
          (remove-watch this sub))
