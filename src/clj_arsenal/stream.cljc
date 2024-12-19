@@ -88,7 +88,8 @@
        
        IDeref
        (-deref
-         [this])]
+         [this]
+         (stream-ref-deref this))]
    
       :clj
       [Object
