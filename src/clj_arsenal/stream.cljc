@@ -145,12 +145,13 @@
 (defn- add-watch!
   [^StreamRef stream-ref k f]
   (let [[old-state new-state] (swap-vals! (.-!state stream-ref) update-in [::stream-states (.-k stream-ref)]
-                                #(-> %
-                                 (assoc-in [::watches k] f)
-                                 (assoc
-                                   ::lives-remaining (::extra-lives (.-config stream-ref))
-                                   ::ref stream-ref
-                                   ::config (.-config stream-ref))))]
+                                (fn [state]
+                                  (-> state
+                                    (assoc-in [::watches k] f)
+                                    (assoc
+                                      ::lives-remaining (::extra-lives (.-config stream-ref))
+                                      ::ref stream-ref
+                                      ::config (.-config stream-ref)))))]
     (when (and
             (zero? (count (get-in old-state [::stream-states (.-k stream-ref) ::watches])))
             (pos? (count (get-in new-state [::stream-states (.-k stream-ref) ::watches]))))
