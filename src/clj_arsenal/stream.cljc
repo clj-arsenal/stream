@@ -445,9 +445,12 @@
   (let [stream-k (vec args)
         !state (.-!state streamer)
         opts (.-opts streamer)]
-        (or (get-in @!state [::stream-states stream-k ::ref])
-          (let [stream-config (apply (.-handler streamer) args)]
-            (->StreamRef !state (vec args) (cond-> stream-config (nil? (::extra-lives stream-config)) (assoc ::extra-lives (or (:extra-lives opts) 2))))))))
+    (or (get-in @!state [::stream-states stream-k ::ref])
+      (let [stream-config (apply (.-handler streamer) args)]
+        (->StreamRef !state (vec args)
+          (cond-> stream-config
+            (nil? (::extra-lives stream-config))
+            (assoc ::extra-lives (or (:extra-lives opts) 2))))))))
 
 (defn- streamer-dispose!
   [^Streamer streamer]
@@ -455,8 +458,18 @@
   ((.-stop-fn streamer))
   nil)
 
-(defn streamer
-  [handler & {:as opts}]
+(defn streamer "
+Creates a streamer.  Calling the streamer returns a stream reference,
+which can be watched and derefed like a built-in reference type.
+
+The `handler` takes all args passed to the streamer call, and should
+return a map of `{::boot boot-fn ::kill ?kill-fn ::snap ?snap-fn ::extra-lives ?extra-lives}`.
+
+Options are:
+- `:flush-signal` - a custom signal to trigger flushes
+- `:extra-lives` - the default number of flushes to go after a stream's watch count
+   reaches zero, before killing it.
+" [handler & {:as opts}]
   (let [!state (atom {::stream-states {} ::streams-to-kill {} ::pending-stream-values {} ::dirty-streams {} ::killed-streams {}})
         [flush-signal stop-fn] (if-some [sig (:flush-signal opts)]
                                  [sig (constantly nil)]
