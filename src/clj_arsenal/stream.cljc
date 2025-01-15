@@ -478,6 +478,136 @@ Options are:
     (sig-listen flush-signal streamer #(flush! !state opts))
     streamer))
 
+(defn derive
+  [deps f & {:keys [on-boot on-kill debounce-ms]}]
+  (let [!deps (volatile! nil)
+        !value (volatile! nil)
+        !watches (volatile! {})
+        !timer (volatile! nil)
+
+        notify-watches-impl
+        (fn [this old-val new-val]
+          (doseq [[k f] @!watches]
+            (f k this old-val new-val)))
+
+        add-watch-impl
+        (fn [this k watch-fn]
+          (#?@(:cljd [do] :default [locking !watches])
+           (let [old-watches @!watches
+                 new-watches (vswap! !watches assoc k watch-fn)]
+             (when (and (empty? old-watches) (seq new-watches))
+               (let [dep-vals (update-vals deps deref)
+                     value (f dep-vals)]
+                 (vreset! !deps dep-vals)
+                 (vreset! !value value))
+               (doseq [[k w] deps]
+                 (add-watch w [this k]
+                   (fn [_ _ _ v]
+                     (vswap! !deps assoc k v)
+                     (#?@(:cljd [do] :default [locking !timer])
+                      (when-not @!timer
+                        (let [old-value @!value]
+                          (vreset! !timer
+                            (basis/schedule-once (or debounce-ms 1)
+                              (fn []
+                                (vreset! !timer nil)
+                                (let [new-value (f @!deps)]
+                                  (vreset! !value new-value)
+                                  (notify-watches-impl this old-value new-value)))))))))))
+               (when (ifn? on-boot)
+                 (on-boot !deps)))))
+          nil)
+
+        remove-watch-impl
+        (fn [this k]
+          (#?@(:cljd [do] :default [locking !watches])
+           (let [old-watches @!watches
+                 new-watches (vswap! !watches dissoc k)]
+             (when (and (seq old-watches) (empty? new-watches))
+               (doseq [[k w] deps]
+                 (remove-watch w [this k]))
+               (#?@(:cljd [do] :default [locking !timer])
+                (when @!timer
+                  (basis/cancel-scheduled @!timer)
+                  (vreset! !timer nil)))
+               (when (ifn? on-kill)
+                 (on-kill !deps)))))
+          nil)
+
+        deref-impl
+        (fn [_]
+          (if (seq @!watches)
+            @!value
+            (f (update-vals deps deref))))]
+    (reify
+      #?@(:cljs
+       [IWatchable
+        (-notify-watches
+          [this old-val new-val]
+          (notify-watches-impl this old-val new-val))
+        (-add-watch
+          [this k f]
+          (add-watch-impl this k f))
+        (-remove-watch
+          [this k]
+          (remove-watch-impl this k))
+
+        IDeref
+        (-deref
+          [this]
+          (deref-impl this))]
+
+       :cljd
+       [IWatchable
+        (-notify-watches
+          [this old-val new-val]
+          (notify-watches-impl this old-val new-val))
+        (-add-watch
+          [this k f]
+          (add-watch-impl this k f))
+        (-remove-watch
+          [this k]
+          (remove-watch-impl this k))
+
+        Subscribable
+        (-subscribe
+          [this push!]
+          (let [watch-key (gensym)]
+            (add-watch-impl this watch-key (fn [_ _ _ v] (push! v)))
+            watch-key))
+        (-call-with-immediate-value
+          [this sub push!]
+          (push! (deref-impl this))
+          true)
+        (-unsubscribe
+          [this sub]
+          (remove-watch-impl this sub))
+
+        IDeref
+        (-deref
+          [this]
+          (deref-impl this))]
+
+       :clj
+       [IRef
+        (getValidator
+          [this]
+          nil)
+        (getWatches
+          [this]
+          @!watches)
+        (addWatch
+          [this k f]
+          (add-watch-impl this k f))
+        (removeWatch
+          [this k]
+          (remove-watch-impl this k))
+
+        IDeref
+        (deref
+          [this]
+          (deref-impl this))]))))
+
 (check ::simple
   (let [inc-signal (basis/signal)
         flush-signal (basis/signal)
