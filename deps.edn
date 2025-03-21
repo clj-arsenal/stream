@@ -1,18 +1,27 @@
-{:paths ["src"]
- :deps {me.raystubbs.clj-arsenal/check {:mvn/version "0.0.2"}
-        me.raystubbs.clj-arsenal/log {:mvn/version "0.0.1"}
-        me.raystubbs.clj-arsenal/basis {:mvn/version "0.0.4"}}
+{:paths
+ ["src"]
+
+ :deps
+ {me.raystubbs.clj-arsenal/check
+  {:mvn/version "0.0.4"}
+
+  me.raystubbs.clj-arsenal/log
+  {:mvn/version "0.0.2"}
+
+  me.raystubbs.clj-arsenal/basis
+  {:mvn/version "0.0.9"}}
 
  :aliases
  {:build
-  {:deps {me.raystubbs.clj-arsenal/build {:mvn/version "0.0.5"}}
+  {:deps
+   {me.raystubbs.clj-arsenal/build {:mvn/version "0.0.5"}}
+
    :ns-default clj-arsenal.build}
   
   :dev
-  {:extra-deps {cider/cider-nrepl {:mvn/version "0.50.0"}
-                criterium/criterium {:mvn/version "0.4.6"}
-                org.clojure/data.fressian {:mvn/version "1.0.0"}
-                com.taoensso/nippy {:mvn/version "3.4.2"}}
+  {:extra-deps
+   {cider/cider-nrepl {:mvn/version "0.50.0"}}
+
    :main-opts ["-m" "nrepl.cmdline" "--middleware" "[cider.nrepl/cider-middleware]"]
    :clj-arsenal.check/enabled true
    :clj-arsenal.check/ns-include-re "clj-arsenal[.]stream([.].+)?"}}
