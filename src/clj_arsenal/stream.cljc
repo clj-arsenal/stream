@@ -1,11 +1,12 @@
 (ns clj-arsenal.stream
   (:require
-   [clj-arsenal.basis :refer [ticker sig-listen sig-unlisten try-fn] :as basis]
-   [clj-arsenal.basis.protocols.dispose :refer [Dispose dispose!]]
-   [clj-arsenal.log :refer [log spy]]
+   [clj-arsenal.basis :refer [m] :as b]
+   [clj-arsenal.basis.protocols.dispose :refer [Dispose]]
+   [clj-arsenal.log :refer [log]]
    [clj-arsenal.check :refer [check expect when-check]]
-   #?@(:cljd [[cljd.core :refer [IWatchable IEquiv IHash IDeref IFn]]
-              [cljd.flutter :refer [Subscribable]]]))
+   #?@(:cljd
+       [[cljd.core :refer [IWatchable IEquiv IHash IDeref IFn]]
+        [cljd.flutter :refer [Subscribable]]]))
   (:import
    #?@(:cljd
        []
@@ -123,9 +124,10 @@
 (defn- notify-watches!
   [^StreamRef stream-ref watches old-val new-val]
   (doseq [[watch-k watch-fn] watches]
-    (try-fn
-      #(watch-fn watch-k stream-ref old-val new-val)
-      :catch #(log :error :msg "error stream watcher" :ex % :stream-k (.-k stream-ref) :watch-k watch-k))))
+    (m
+      (watch-fn watch-k stream-ref old-val new-val)
+      :catch b/err-any err 
+      (log :error :msg "error stream watcher" :ex err :stream-k (.-k stream-ref) :watch-k watch-k))))
 
 (defn- push-fn
   [!state stream-k]
@@ -271,8 +273,9 @@
     (doseq [[stream-k stream-state] killed-streams
             :let [kill-fn (get-in stream-state [::config ::kill])]
             :when (ifn? kill-fn)]
-      (try-fn kill-fn
-        :catch #(log :error :msg "error in stream kill function" :ex % :stream-k stream-k)))
+      (m kill-fn
+        :catch b/err-any err
+        (log :error :msg "error in stream kill function" :ex err :stream-k stream-k)))
     (doseq [[stream-k stream-state] dirty-streams]
       (notify-watches!
         (->StreamRef !state stream-k (::config stream-state))
@@ -365,7 +368,7 @@
       [Closeable
        (close
          [this]
-         (dispose! this))
+         (b/dispose! this))
        
        IFn
        (invoke
@@ -438,7 +441,7 @@
          [this args]
          (streamer-call this args))])
   Dispose
-  (-dispose [this] (streamer-dispose! this)))
+  (-dispose! [this] (streamer-dispose! this)))
 
 (defn- streamer-call
   [^Streamer streamer args]
@@ -454,7 +457,7 @@
 
 (defn- streamer-dispose!
   [^Streamer streamer]
-  (sig-unlisten (.-flush-signal streamer) streamer)
+  (b/notifier-unlisten (.-flush-signal streamer) streamer)
   ((.-stop-fn streamer))
   nil)
 
@@ -471,11 +474,10 @@ Options are:
    reaches zero, before killing it.
 " [handler & {:as opts}]
   (let [!state (atom {::stream-states {} ::streams-to-kill {} ::pending-stream-values {} ::dirty-streams {} ::killed-streams {}})
-        [flush-signal stop-fn] (if-some [sig (:flush-signal opts)]
-                                 [sig (constantly nil)]
-                                 (ticker 20))
-        streamer (->Streamer handler !state opts flush-signal stop-fn)]
-    (sig-listen flush-signal streamer #(flush! !state opts))
+        flush-clock (b/clock 20)
+        stop-fn (fn [] (b/dispose! flush-clock))
+        streamer (->Streamer handler !state opts flush-clock stop-fn)]
+    (b/notifier-listen flush-clock streamer #(flush! !state opts))
     streamer))
 
 (defn derive
@@ -508,7 +510,7 @@ Options are:
                       (when-not @!timer
                         (let [old-value @!value]
                           (vreset! !timer
-                            (basis/schedule-once (or debounce-ms 1)
+                            (b/schedule-once (or debounce-ms 1)
                               (fn []
                                 (vreset! !timer nil)
                                 (let [new-value (f @!deps)]
@@ -528,7 +530,7 @@ Options are:
                  (remove-watch w [this k]))
                (#?@(:cljd [do] :default [locking !timer])
                 (when @!timer
-                  (basis/cancel-scheduled @!timer)
+                  (b/cancel-scheduled @!timer)
                   (vreset! !timer nil)))
                (when (ifn? on-kill)
                  (on-kill !deps)))))
@@ -609,8 +611,8 @@ Options are:
           (deref-impl this))]))))
 
 (check ::simple
-  (let [inc-signal (basis/signal)
-        flush-signal (basis/signal)
+  (let [inc-signal (b/signal)
+        flush-signal (b/signal)
         !sync (atom nil)
         !flush-count (atom 0)
         stream (streamer
@@ -621,13 +623,13 @@ Options are:
                        {::boot
                         (fn [push!]
                           (push! @!counter)
-                          (sig-listen inc-signal ::listen
+                          (b/notifier-listen inc-signal ::listen
                             (fn []
                               (push! (swap! !counter inc)))))
 
                         ::kill
                         (fn []
-                          (sig-unlisten inc-signal ::listen))
+                          (b/notifier-unlisten inc-signal ::listen))
 
                         ::snap
                         (fn []
