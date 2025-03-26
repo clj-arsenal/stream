@@ -127,7 +127,7 @@
     (m
       (watch-fn watch-k stream-ref old-val new-val)
       :catch b/err-any err 
-      (log :error :msg "error stream watcher" :ex err :stream-k (.-k stream-ref) :watch-k watch-k))))
+      (log :error :ex err :stream-k (.-k stream-ref) :watch-k watch-k))))
 
 (defn- push-fn
   [!state stream-k]
@@ -527,10 +527,14 @@ Options are:
                  (let
                    [deps-vals (vswap! !deps-vals assoc k v)
                     value (apply f deps-vals args)]
-                   (vswap! !value value)
+                   (vreset! !value value)
                    (push! value)))))
            (when (ifn? on-boot)
              (on-boot @!deps-vals)))
+
+         ::snap
+         (fn []
+           @!value)
 
          ::kill
          (fn []
