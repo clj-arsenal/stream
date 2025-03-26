@@ -443,17 +443,26 @@
   Dispose
   (-dispose! [this] (streamer-dispose! this)))
 
+(defprotocol StreamSpec
+  (^:private -resolve-spec [ss streamer args]))
+
 (defn- streamer-call
   [^Streamer streamer args]
   (let [stream-k (vec args)
         !state (.-!state streamer)
         opts (.-opts streamer)]
     (or (get-in @!state [::stream-states stream-k ::ref])
-      (let [stream-config (apply (.-handler streamer) args)]
-        (->StreamRef !state (vec args)
-          (cond-> stream-config
-            (nil? (::extra-lives stream-config))
-            (assoc ::extra-lives (or (:extra-lives opts) 2))))))))
+      (let
+        [stream-config
+         (if (satisfies? StreamSpec (first args))
+           (-resolve-spec (first args) streamer (rest args))
+           (apply (.-handler streamer) args))]
+        (if (instance? StreamRef stream-config)
+          stream-config
+          (->StreamRef !state (vec args)
+            (cond-> stream-config
+              (nil? (::extra-lives stream-config))
+              (assoc ::extra-lives (or (:extra-lives opts) 2)))))))))
 
 (defn- streamer-dispose!
   [^Streamer streamer]
@@ -480,135 +489,55 @@ Options are:
     (b/notifier-listen flush-clock streamer #(flush! !state opts))
     streamer))
 
-(defn derive
-  [deps f & {:keys [on-boot on-kill debounce-ms]}]
-  (let [!deps (volatile! nil)
-        !value (volatile! nil)
-        !watches (volatile! {})
-        !timer (volatile! nil)
+(defn args-spec
+  [& args]
+  (reify
+    StreamSpec
+    (-resolve-spec
+      [_ streamer _]
+      (apply (.-handler ^Streamer streamer) args))))
 
-        notify-watches-impl
-        (fn [this old-val new-val]
-          (doseq [[k f] @!watches]
-            (f k this old-val new-val)))
+(defn derive-spec
+  [deps f & {:keys [on-boot on-kill extra-lives]}]
+  {:pre [(or (map? deps) (fn? deps))]}
+  (reify
+    StreamSpec
+    (-resolve-spec
+      [_ streamer args]
+      (let
+        [deps (if (fn? deps) (apply deps streamer args) deps)
+         deps (update-vals deps #(if (satisfies? StreamSpec %) (streamer %) %))
+         !deps-vals (volatile! {})
+         !value (volatile! {})
+         watch-key (gensym)]
+        {::extra-lives extra-lives
 
-        add-watch-impl
-        (fn [this k watch-fn]
-          (#?@(:cljd [do] :default [locking !watches])
-           (let [old-watches @!watches
-                 new-watches (vswap! !watches assoc k watch-fn)]
-             (when (and (empty? old-watches) (seq new-watches))
-               (let [dep-vals (update-vals deps deref)
-                     value (f dep-vals)]
-                 (vreset! !deps dep-vals)
-                 (vreset! !value value))
-               (doseq [[k w] deps]
-                 (add-watch w [this k]
-                   (fn [_ _ _ v]
-                     (vswap! !deps assoc k v)
-                     (#?@(:cljd [do] :default [locking !timer])
-                      (when-not @!timer
-                        (let [old-value @!value]
-                          (vreset! !timer
-                            (b/schedule-once (or debounce-ms 1)
-                              (fn []
-                                (vreset! !timer nil)
-                                (let [new-value (f @!deps)]
-                                  (vreset! !value new-value)
-                                  (notify-watches-impl this old-value new-value)))))))))))
-               (when (ifn? on-boot)
-                 (on-boot !deps)))))
-          nil)
+         ::boot
+         (fn [push!]
+           (let
+             [dep-vals (update-vals deps deref)
+              value (apply f dep-vals args)]
+             (vreset! !deps-vals dep-vals)
+             (vreset! !value value)
+             (push! value))
 
-        remove-watch-impl
-        (fn [this k]
-          (#?@(:cljd [do] :default [locking !watches])
-           (let [old-watches @!watches
-                 new-watches (vswap! !watches dissoc k)]
-             (when (and (seq old-watches) (empty? new-watches))
-               (doseq [[k w] deps]
-                 (remove-watch w [this k]))
-               (#?@(:cljd [do] :default [locking !timer])
-                (when @!timer
-                  (b/cancel-scheduled @!timer)
-                  (vreset! !timer nil)))
-               (when (ifn? on-kill)
-                 (on-kill !deps)))))
-          nil)
+           (doseq [[k w] deps]
+             (add-watch w watch-key
+               (fn [_ _ _ v]
+                 (let
+                   [deps-vals (vswap! !deps-vals assoc k v)
+                    value (apply f deps-vals args)]
+                   (vswap! !value value)
+                   (push! value)))))
+           (when (ifn? on-boot)
+             (on-boot @!deps-vals)))
 
-        deref-impl
-        (fn [_]
-          (if (seq @!watches)
-            @!value
-            (f (update-vals deps deref))))]
-    (reify
-      #?@(:cljs
-       [IWatchable
-        (-notify-watches
-          [this old-val new-val]
-          (notify-watches-impl this old-val new-val))
-        (-add-watch
-          [this k f]
-          (add-watch-impl this k f))
-        (-remove-watch
-          [this k]
-          (remove-watch-impl this k))
-
-        IDeref
-        (-deref
-          [this]
-          (deref-impl this))]
-
-       :cljd
-       [IWatchable
-        (-notify-watches
-          [this old-val new-val]
-          (notify-watches-impl this old-val new-val))
-        (-add-watch
-          [this k f]
-          (add-watch-impl this k f))
-        (-remove-watch
-          [this k]
-          (remove-watch-impl this k))
-
-        Subscribable
-        (-subscribe
-          [this push!]
-          (let [watch-key (gensym)]
-            (add-watch-impl this watch-key (fn [_ _ _ v] (push! v)))
-            watch-key))
-        (-call-with-immediate-value
-          [this sub push!]
-          (push! (deref-impl this))
-          true)
-        (-unsubscribe
-          [this sub]
-          (remove-watch-impl this sub))
-
-        IDeref
-        (-deref
-          [this]
-          (deref-impl this))]
-
-       :clj
-       [IRef
-        (getValidator
-          [this]
-          nil)
-        (getWatches
-          [this]
-          @!watches)
-        (addWatch
-          [this k f]
-          (add-watch-impl this k f))
-        (removeWatch
-          [this k]
-          (remove-watch-impl this k))
-
-        IDeref
-        (deref
-          [this]
-          (deref-impl this))]))))
+         ::kill
+         (fn []
+           (doseq [w (vals deps)]
+             (remove-watch w watch-key))
+           (when (ifn? on-kill)
+             (on-kill @!deps-vals)))}))))
 
 (check ::simple
   (let [inc-signal (b/signal)
