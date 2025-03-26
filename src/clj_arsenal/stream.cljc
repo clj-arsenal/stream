@@ -467,7 +467,8 @@
 (defn- streamer-dispose!
   [^Streamer streamer]
   (b/notifier-unlisten (.-flush-signal streamer) streamer)
-  ((.-stop-fn streamer))
+  (when-some [stop-fn (.-stop-fn streamer)]
+    (stop-fn))
   nil)
 
 (defn streamer "
@@ -483,10 +484,15 @@ Options are:
    reaches zero, before killing it.
 " [handler & {:as opts}]
   (let [!state (atom {::stream-states {} ::streams-to-kill {} ::pending-stream-values {} ::dirty-streams {} ::killed-streams {}})
-        flush-clock (b/clock 20)
-        stop-fn (fn [] (b/dispose! flush-clock))
-        streamer (->Streamer handler !state opts flush-clock stop-fn)]
-    (b/notifier-listen flush-clock streamer #(flush! !state opts))
+        
+        [flush-signal streamer]
+        (if-some [flush-signal (:flush-signal opts)]
+          [flush-signal (->Streamer handler !state opts flush-signal nil)]
+          (let
+            [flush-clock (b/clock 20)
+             stop-fn (fn [] (b/dispose! flush-clock))]
+            [flush-clock (->Streamer handler !state opts flush-clock stop-fn)]))]
+    (b/notifier-listen flush-signal streamer #(flush! !state opts))
     streamer))
 
 (defn args-spec
