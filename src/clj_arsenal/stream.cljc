@@ -2,7 +2,7 @@
   (:require
    [clj-arsenal.basis :refer [m] :as b]
    [clj-arsenal.basis.protocols.dispose :refer [Dispose]]
-   [clj-arsenal.log :refer [log]]
+   [clj-arsenal.log :refer [log spy]]
    [clj-arsenal.check :refer [check expect when-check]]
    #?@(:cljd
        [[cljd.core :refer [IWatchable IEquiv IHash IDeref IFn]]
@@ -309,33 +309,38 @@
         (-resolve-spec first-arg streamer rest-args)
         (apply (.-handler streamer) args)))))
 
-(defn- boot-stream!
-  [^StreamRef stream-ref]
-  (let
-    [args (.-args-vec stream-ref)
-     streamer (.-streamer stream-ref)
-     !state (.-!state streamer)
-     config (create-config stream-ref)
-     boot-fn (::boot config)]
-    (swap! !state update-in [::stream-states args] assoc ::config config ::lives-remaining (::extra-lives config))
-    (when-not (ifn? boot-fn)
-      (throw (ex-info "no boot function given for stream" {:stream-args args ::stream-config config})))
-    (boot-fn (push-fn !state (.-args-vec stream-ref)))
-    nil))
-
 (defn- add-watch!
   [^StreamRef stream-ref k f]
   (let
     [!state (-> stream-ref .-streamer .-!state)
+     args-vec (.-args-vec stream-ref)
 
      [old-state new-state]
-     (swap-vals! !state assoc-in [::stream-states (.-args-vec stream-ref) ::watches k] f)]
+     (swap-vals! !state update-in [::stream-states args-vec]
+       (fn [{old-watches ::watches :as stream-state}]
+         (let
+           [new-watches (assoc old-watches k f)]
+           (if (pos? (count old-watches))
+             (assoc stream-state ::watches new-watches)
+             (let
+               [config
+                (update (create-config stream-ref) ::extra-lives
+                  #(or % (-> stream-ref .-streamer .-opts :extra-lives) 1))]
+               (assoc stream-state
+                 ::config config
+                 ::lives-remaining (::extra-lives config)
+                 ::watches new-watches))))))
+     
+     old-stream-state (get-in old-state [::stream-states args-vec])
+     new-stream-state (get-in new-state [::stream-states args-vec])]
 
     (when
       (and
-        (zero? (count (get-in old-state [::stream-states (.-args-vec stream-ref) ::watches])))
-        (pos? (count (get-in new-state [::stream-states (.-args-vec stream-ref) ::watches]))))
-      (boot-stream! stream-ref))
+        (zero? (count (::watches old-stream-state)))
+        (pos? (count (::watches new-stream-state))))
+      (let [boot-fn (get-in new-stream-state [::config ::boot])]
+        (when (ifn? boot-fn)
+          (boot-fn (push-fn !state (.-args-vec stream-ref))))))
     nil))
 
 (defn- remove-watch!
@@ -415,47 +420,57 @@
   [state opts]
   (let
     [equiv-fn (or (:equiv-fn opts) identical?)
-
-     killed-streams
-     (persistent!
-       (reduce
-         (fn [m k]
-           (let [stream-state (get-in state [::stream-states k])
-                 lives-remaining (::lives-remaining stream-state)]
-             (if (and (not (pos? lives-remaining)) (zero? (count (::watches stream-state))))
-               (assoc! m k stream-state))))
-         (transient (::killed-streams state))
-         (::streams-to-kill state)))
-
-     stream-states
-     (persistent!
-       (reduce
-         (fn [m k]
-           (dissoc! m k))
-         (transient (::stream-states state))
-         (keys killed-streams)))
+     stream-states (::stream-states state)
 
      dirty-streams
      (persistent!
        (reduce-kv
-         (fn [m k v]
-           (let [stream-state (get stream-states k)
-                 old-value (if-some [existing (get m k)]
-                             (::value existing)
-                             (::value stream-state))]
+         (fn [!dirty-streams k v]
+           (let
+             [stream-state (get stream-states k)
+
+              old-value
+              (if-some [existing (get !dirty-streams k)]
+                (::value existing)
+                (::value stream-state))]
              (if (or (nil? stream-state) (equiv-fn v old-value))
-               m
-               (assoc! m k (assoc stream-state ::old-value old-value ::value v)))))
+               !dirty-streams
+               (assoc! !dirty-streams k (assoc stream-state ::old-value old-value ::value v)))))
          (transient (::dirty-streams state))
          (::pending-stream-values state)))
 
-     stream-states
-     (persistent!
+     [stream-states killed-streams]
+     (map persistent!
        (reduce-kv
-         (fn [m k v]
-           (assoc! m k (assoc (get m k) ::value (::value v))))
-         (transient stream-states)
-         dirty-streams))]
+         (fn [[!stream-states !killed-streams] k v]
+           (let
+             [lives-remaining (::lives-remaining v)
+              extra-lives (get-in v [::config ::extra-lives])
+              num-watches (count (::watches v))
+              new-value (get-in dirty-streams [k ::value] ::not-found)]
+             (cond
+               (zero? num-watches)
+               (if (pos? lives-remaining)
+                 [(assoc! !stream-states k
+                    (cond-> (update v ::lives-remaining dec)
+                      (not= new-value ::not-found)
+                      (assoc ::value new-value)))
+                  !killed-streams]
+                 [(dissoc! !stream-states k)
+                  (assoc! !killed-streams k v)])
+
+               :else
+               [(assoc! !stream-states k
+                  (cond-> v
+                    (not= new-value ::not-found)
+                    (assoc ::value new-value)
+
+                    (< lives-remaining extra-lives)
+                    (assoc ::lives-remaining extra-lives)))
+                !killed-streams])))
+         [(transient stream-states)
+          (transient (::killed-streams state))]
+         (::stream-states state)))]
     (assoc state
       ::pending-stream-values {}
       ::dirty-streams dirty-streams
@@ -526,36 +541,6 @@ Options are:
          [flush-clock (->Streamer handler !state opts flush-clock stop-fn)]))]
     (b/notifier-listen flush-signal streamer #(flush! streamer opts))
     streamer))
-
-(defn purge!
-  [^Streamer streamer]
-  (#?@(:cljd [do] :default [locking (.-!state streamer)])
-   (let
-     [!state (.-!state streamer)
-      old-stream-states (::stream-states @!state)
-
-      new-stream-states
-      (persistent!
-        (reduce-kv
-          (fn [t args-vec stream-state]
-            (let
-              [{kill-fn ::kill} (::config stream-state)
-               {boot-fn ::boot :as new-config} (create-config (->StreamRef streamer args-vec))]
-              (when (ifn? kill-fn)
-                (m
-                  (kill-fn)
-                  :catch b/err-any err
-                  (log :error :err err ::stream-args args-vec)))
-              (when (ifn? boot-fn)
-                (m
-                  (boot-fn (push-fn (.-!state streamer) args-vec))
-                  :catch b/err-any err
-                  (log :error :err err ::stream-args args-vec)))
-              (assoc! t args-vec (assoc stream-state ::config new-config))))
-          (transient old-stream-states)
-          old-stream-states))]
-   (swap! (.-!state streamer) assoc ::stream-states new-stream-states))
-   nil))
 
 (defn args-spec
   [& args]
