@@ -346,7 +346,11 @@
 (defn- remove-watch!
   [^StreamRef stream-ref k]
   (let [!state (-> stream-ref .-streamer .-!state)]
-    (swap! !state update-in [::stream-states (.-args-vec stream-ref) ::watches] dissoc k))
+    (swap! !state
+      (fn [state]
+        (if-not (contains? (get-in state [::stream-states (.-args-vec stream-ref) ::watches]) k)
+          state
+          (update-in state [::stream-states (.-args-vec stream-ref) ::watches] dissoc k)))))
   nil)
 
 (defn- stream-ref-equiv
@@ -580,7 +584,7 @@ Options are:
                     value (apply f deps-vals args)]
                    (push! value)))))
            (when (ifn? on-boot)
-             (on-boot @!deps-vals)))
+             (apply on-boot @!deps-vals args)))
 
          ::snap
          (fn []
@@ -591,7 +595,7 @@ Options are:
            (doseq [w (vals deps)]
              (remove-watch w watch-key))
            (when (ifn? on-kill)
-             (on-kill @!deps-vals)))}))))
+             (apply on-kill @!deps-vals args)))}))))
 
 (check ::simple
   (let [inc-signal (b/signal)
