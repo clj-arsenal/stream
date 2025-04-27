@@ -1,5 +1,5 @@
 {:deps
- {me.raystubbs.clj-arsenal/action
+ {me.raystubbs.clj-arsenal/stream
   {:local/root ".."}
 
   me.raystubbs.clj-arsenal/check
