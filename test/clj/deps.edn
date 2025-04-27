@@ -1,0 +1,14 @@
+{:paths
+ ["src"]
+
+ :deps
+ {me.raystubbs.clj-stream/action
+  {:local/root "../.."}
+
+  me.raystubbs.clj-stream/action-test
+  {:local/root ".."}}
+
+ :aliases
+ {:test
+  {:clj-arsenal.check/enabled true
+   :clj-arsenal.check/ns-include-re "clj-arsenal[.]stream([.].+)?"}}}

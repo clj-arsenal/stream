@@ -1,0 +1,26 @@
+(ns test
+  (:require
+   [clj-arsenal.basis :as b]
+   [clj-arsenal.check :as check]
+   [clj-arsenal.stream]
+   ["dart:io" :as io]
+   [clojure.string :as str]))
+
+(defn main
+  []
+  (check/run)
+  (b/chain
+    (check/await-all-checks)
+    (fn [{passed :clj-arsenal.check/passed failed :clj-arsenal.check/failed :as x}]
+      (cond
+        (seq failed)
+        (binding
+          [*out* io/stderr]
+          (print
+            "\u001b[31mThe following checks failed:\n"
+              (str/join "\n" (map #(str "  " %) failed))
+              "\n\u001b[0m\n")
+          (io/exit 1))
+
+        :else
+        (print "\u001b[32mAll " (count passed) " checks passed.\n\u001b[0m")))))
