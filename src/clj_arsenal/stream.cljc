@@ -551,7 +551,9 @@ Options are:
     StreamSpec
     (-resolve-spec
       [_ streamer _]
-      (apply (.-handler ^Streamer streamer) args))))
+      (if (satisfies? StreamSpec (first args))
+        (-resolve-spec (first args) streamer (rest args))
+        (apply (.-handler ^Streamer streamer) args)))))
 
 (defn derive-spec
   [deps f & {:keys [on-boot on-kill extra-lives]}]
