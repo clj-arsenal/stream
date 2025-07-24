@@ -550,10 +550,10 @@ Options are:
   (reify
     StreamSpec
     (-resolve-spec
-      [_ streamer _]
+      [_ streamer extra-args]
       (if (satisfies? StreamSpec (first args))
-        (-resolve-spec (first args) streamer (rest args))
-        (apply (.-handler ^Streamer streamer) args)))))
+        (-resolve-spec (first args) streamer (concat (rest args) extra-args))
+        (apply (.-handler ^Streamer streamer) (concat args extra-args))))))
 
 (defn derive-spec
   [deps f & {:keys [on-boot on-kill extra-lives]}]
@@ -566,35 +566,57 @@ Options are:
         [deps (if (fn? deps) (apply deps args) deps)
          deps (update-vals deps #(apply streamer %))
          !deps-vals (volatile! {})
+         !derived (atom ::placeholder)
          watch-key (gensym)]
         {::extra-lives extra-lives
 
          ::boot
          (fn [push!]
+           (add-watch !derived watch-key
+             (fn [_ _ old-val new-val]
+               (when (not= old-val new-val)
+                 (when (and (vector? old-val) (-> old-val meta :stream))
+                   (remove-watch (apply streamer old-val) watch-key))
+                 (cond
+                   (and (vector? new-val) (-> new-val meta :stream))
+                   (add-watch (apply streamer new-val) watch-key
+                     (fn [_ _ _ v]
+                       (push! v)))
+                   
+                   :else
+                   (push! new-val)))))
            (let
              [dep-vals (update-vals deps deref)
-              value (apply f dep-vals args)]
+              derived (apply f dep-vals args)]
              (vreset! !deps-vals dep-vals)
-             (push! value))
+             (reset! !derived derived))
 
            (doseq [[k w] deps]
              (add-watch w watch-key
-               (fn [_ _ _ v]
-                 (let
-                   [deps-vals (vswap! !deps-vals assoc k v)
-                    value (apply f deps-vals args)]
-                   (push! value)))))
+               (fn [_ _ old-val new-val]
+                 (when (not= old-val new-val)
+                   (let
+                     [deps-vals (vswap! !deps-vals assoc k new-val)
+                      derived (apply f deps-vals args)]
+                     (reset! !derived derived))))))
            (when (ifn? on-boot)
              (apply on-boot @!deps-vals args)))
 
          ::snap
          (fn []
-           (apply f (update-vals deps deref) args))
+           (let
+             [derived @!derived
+              derived (if (= derived ::placeholder) (apply f (update-vals deps deref) args) derived)]
+             (if (and (vector? derived) (-> derived meta :stream))
+               @(apply streamer derived)
+               derived)))
 
          ::kill
          (fn []
            (doseq [w (vals deps)]
              (remove-watch w watch-key))
+           (reset! !derived nil)
+           (remove-watch !derived watch-key)
            (when (ifn? on-kill)
              (apply on-kill @!deps-vals args)))}))))
 
