@@ -311,7 +311,8 @@
 (defn- add-watch!
   [^StreamRef stream-ref k f]
   (let
-    [!state (-> stream-ref ^Streamer (.-streamer) .-!state)
+    [streamer ^Streamer (.-streamer stream-ref)
+     !state (.-!state streamer)
      args-vec (.-args-vec stream-ref)
 
      [old-state new-state]
@@ -319,12 +320,20 @@
        (fn [{old-watches ::watches :as stream-state}]
          (let
            [new-watches (assoc old-watches k f)]
-           (if (pos? (count old-watches))
-             (assoc stream-state ::watches new-watches)
+           (cond
+             (some? stream-state)
+             (assoc stream-state
+               ::lives-remaining (get-in stream-state [::config ::extra-lives])
+               ::watches new-watches)
+
+             :else
              (let
-               [config
+               [default-extra-lives 
+                (-> stream-ref ^Streamer (.-streamer) .-opts :extra-lives (or 1))
+
+                config
                 (update (create-config stream-ref) ::extra-lives
-                  #(or % (-> stream-ref ^Streamer (.-streamer) .-opts :extra-lives) 1))]
+                  #(or % default-extra-lives))]
                (assoc stream-state
                  ::config config
                  ::lives-remaining (::extra-lives config)
@@ -333,13 +342,12 @@
      old-stream-state (get-in old-state [::stream-states args-vec])
      new-stream-state (get-in new-state [::stream-states args-vec])]
 
-    (when
-      (and
-        (zero? (count (::watches old-stream-state)))
-        (pos? (count (::watches new-stream-state))))
+    (when-not old-stream-state
       (let [boot-fn (get-in new-stream-state [::config ::boot])]
         (when (ifn? boot-fn)
-          (boot-fn (push-fn !state (.-args-vec stream-ref))))))
+          (boot-fn
+            {:push! (push-fn !state (.-args-vec stream-ref))
+             :stream streamer}))))
     nil))
 
 (defn- remove-watch!
@@ -365,14 +373,15 @@
 (defn- stream-ref-deref
   [^StreamRef stream-ref]
   (let
-    [!state (-> stream-ref ^Streamer (.-streamer) .-!state)
+    [streamer ^Streamer (.-streamer stream-ref)
+     !state (.-!state streamer)
      stream-state (get-in @!state [::stream-states (.-args-vec stream-ref)] {})
      stream-value (get stream-state ::value ::not-found)]
     (if (not= stream-value ::not-found)
       stream-value
       (let [{snap-fn ::snap} (or (::config stream-state) (create-config stream-ref))]
         (when (ifn? snap-fn)
-          (snap-fn))))))
+          (snap-fn {:stream streamer}))))))
 
 (defn- prepare-flush-secondary
   [state opts]
@@ -491,7 +500,7 @@
        :let [kill-fn (get-in stream-state [::config ::kill])]
        :when (ifn? kill-fn)]
       (m
-        (kill-fn)
+        (kill-fn {})
         :catch b/err-any err
         (log :error :ex err ::stream-args args-vec)))
     (doseq
@@ -571,7 +580,7 @@ Options are:
         {::extra-lives extra-lives
 
          ::boot
-         (fn [push!]
+         (fn [{:keys [push!]}]
            (add-watch !derived watch-key
              (fn [_ _ old-val new-val]
                (when (not= old-val new-val)
@@ -603,7 +612,7 @@ Options are:
              (apply on-boot @!deps-vals args)))
 
          ::snap
-         (fn []
+         (fn [_]
            (let
              [derived @!derived
               derived (if (= derived ::placeholder) (apply f (update-vals deps deref) args) derived)]
@@ -612,7 +621,7 @@ Options are:
                derived)))
 
          ::kill
-         (fn []
+         (fn [_]
            (doseq [w (vals deps)]
              (remove-watch w watch-key))
            (reset! !derived nil)
