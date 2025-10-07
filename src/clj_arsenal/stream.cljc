@@ -379,9 +379,15 @@
      stream-value (get stream-state ::value ::not-found)]
     (if (not= stream-value ::not-found)
       stream-value
-      (let [{snap-fn ::snap} (or (::config stream-state) (create-config stream-ref))]
-        (when (ifn? snap-fn)
-          (snap-fn {:stream streamer}))))))
+      (let [{snap-fn ::snap default-value ::default}
+            (or (::config stream-state)
+              (create-config stream-ref))]
+        (cond
+          (ifn? snap-fn)
+          (snap-fn {:stream streamer})
+          
+          :else
+          default-value)))))
 
 (defn- prepare-flush-secondary
   [state opts]
@@ -406,7 +412,9 @@
      (persistent!
        (reduce-kv
          (fn [m k v]
-           (assoc! m k (assoc (get m k) ::value (::value v))))
+           (cond-> m
+             (not (get-in v [::config ::ephemeral]))
+             (assoc! k (assoc (get m k) ::value (::value v)))))
          (transient (::stream-states state))
          dirty-streams))]
     (assoc state
@@ -441,13 +449,14 @@
            (let
              [stream-state (get stream-states k)
 
-              old-value
-              (if-some [existing (get !dirty-streams k)]
-                (::value existing)
-                (::value stream-state))]
+              old-value (get-in !dirty-streams [k ::value] ::not-found)
+              old-value (if (= ::not-found old-value) (get stream-state k ::not-found) old-value)]
              (if (or (nil? stream-state) (equiv-fn v old-value))
                !dirty-streams
-               (assoc! !dirty-streams k (assoc stream-state ::old-value old-value ::value v)))))
+               (assoc! !dirty-streams k
+                 (cond-> (assoc stream-state ::value v)
+                   (not= ::not-found old-value)
+                   (assoc ::old-value old-value))))))
          (transient (::dirty-streams state))
          (::pending-stream-values state)))
 
@@ -457,9 +466,15 @@
          (fn [[!stream-states !killed-streams] k v]
            (let
              [lives-remaining (::lives-remaining v)
-              extra-lives (get-in v [::config ::extra-lives])
+              config (::config v)
+              extra-lives (::extra-lives config)
+              ephemeral (::ephemeral config)
               num-watches (count (::watches v))
-              new-value (get-in dirty-streams [k ::value] ::not-found)]
+
+              new-value
+              (if ephemeral
+                ::not-found
+                (get-in dirty-streams [k ::value] ::not-found))]
              (cond
                (zero? num-watches)
                (if (pos? lives-remaining)
@@ -534,7 +549,7 @@ Creates a streamer.  Calling the streamer returns a stream reference,
 which can be watched and derefed like a built-in reference type.
 
 The `handler` takes all args passed to the streamer call, and should
-return a map of `{::boot boot-fn ::kill ?kill-fn ::snap ?snap-fn ::extra-lives ?extra-lives}`.
+return a map of `{::boot boot-fn ::kill ?kill-fn ::snap ?snap-fn ::extra-lives ?extra-lives ::default ?default-value}`.
 
 Options are:
 - `:flush-signal` - a custom signal to trigger flushes
