@@ -398,10 +398,11 @@
      (persistent!
        (reduce-kv
          (fn [m k v]
-           (let [stream-state (get-in state [::stream-states k])
-                 old-value (if-some [existing (get m k)]
-                             (::value existing)
-                             (::value stream-state))]
+           (let
+             [stream-state (get-in state [::stream-states k])
+              old-value (get-in m [k ::value] ::not-found)
+              old-value (if (= ::not-found old-value) (get stream-state ::value ::not-found) old-value)
+              old-value (if (= ::not-found old-value) (get-in stream-state [::config ::default]) old-value)]
              (if (or (nil? stream-state) (equiv-fn v old-value))
                m
                (assoc! m k (assoc stream-state ::old-value old-value ::value v)))))
@@ -450,13 +451,12 @@
              [stream-state (get stream-states k)
 
               old-value (get-in !dirty-streams [k ::value] ::not-found)
-              old-value (if (= ::not-found old-value) (get stream-state k ::not-found) old-value)]
+              old-value (if (= ::not-found old-value) (get stream-state ::value ::not-found) old-value)
+              old-value (if (= ::not-found old-value) (get-in stream-state [::config ::default]) old-value)]
              (if (or (nil? stream-state) (equiv-fn v old-value))
                !dirty-streams
                (assoc! !dirty-streams k
-                 (cond-> (assoc stream-state ::value v)
-                   (not= ::not-found old-value)
-                   (assoc ::old-value old-value))))))
+                 (assoc stream-state ::value v ::old-value old-value)))))
          (transient (::dirty-streams state))
          (::pending-stream-values state)))
 
