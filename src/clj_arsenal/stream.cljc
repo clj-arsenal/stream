@@ -21,167 +21,171 @@
 (declare
   ^:private notify-watches! ^:private add-watch! ^:private remove-watch!
   ^:private stream-ref-equiv ^:private stream-ref-hash ^:private stream-ref-deref
-  ^:private streamer-call ^:private streamer-dispose!)
+  ^:private streamer-ref-call ^:private streamer-dispose!)
 
 (defprotocol StreamSpec
-  (^:private -resolve-spec [ss streamer args]))
+  (^:private -resolve-spec [ss streamer-ref args]))
 
 (deftype ^:private Streamer [handler !state opts flush-signal stop-fn]
+  Dispose
+  (-dispose! [this] (streamer-dispose! this)))
+
+(deftype ^:private StreamerRef [^Streamer streamer context]
   #?@(:cljs
       [IFn
        (-invoke [this]
-         (streamer-call this []))
+         (streamer-ref-call this []))
        (-invoke [this x]
-        (streamer-call this [x]))
+        (streamer-ref-call this [x]))
        (-invoke [this x1 x2]
-        (streamer-call this [x1 x2]))
+        (streamer-ref-call this [x1 x2]))
        (-invoke [this x1 x2 x3]
-        (streamer-call this [x1 x2 x3]))
+        (streamer-ref-call this [x1 x2 x3]))
        (-invoke [this x1 x2 x3 x4]
-        (streamer-call this [x1 x2 x3 x4]))
+        (streamer-ref-call this [x1 x2 x3 x4]))
        (-invoke [this x1 x2 x3 x4 x5]
-        (streamer-call this [x1 x2 x3 x4 x5]))
+        (streamer-ref-call this [x1 x2 x3 x4 x5]))
        (-invoke [this x1 x2 x3 x4 x5 x6]
-        (streamer-call this [x1 x2 x3 x4 x5 x6]))
+        (streamer-ref-call this [x1 x2 x3 x4 x5 x6]))
        (-invoke [this x1 x2 x3 x4 x5 x6 x7]
-        (streamer-call this [x1 x2 x3 x4 x5 x6 x7]))
+        (streamer-ref-call this [x1 x2 x3 x4 x5 x6 x7]))
        (-invoke [this x1 x2 x3 x4 x5 x6 x7 x8]
-        (streamer-call this [x1 x2 x3 x4 x5 x6 x7 x8]))
+        (streamer-ref-call this [x1 x2 x3 x4 x5 x6 x7 x8]))
        (-invoke [this x1 x2 x3 x4 x5 x6 x7 x8 x9]
-        (streamer-call this [x1 x2 x3 x4 x5 x6 x7 x8 x9]))
+        (streamer-ref-call this [x1 x2 x3 x4 x5 x6 x7 x8 x9]))
        (-invoke [this x1 x2 x3 x4 x5 x6 x7 x8 x9 x10]
-        (streamer-call this [x1 x2 x3 x4 x5 x6 x7 x8 x9 x10]))
+        (streamer-ref-call this [x1 x2 x3 x4 x5 x6 x7 x8 x9 x10]))
        (-invoke [this x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11]
-        (streamer-call this [x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11]))
+        (streamer-ref-call this [x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11]))
        (-invoke [this x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12]
-        (streamer-call this [x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12]))
+        (streamer-ref-call this [x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12]))
        (-invoke [this x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13]
-        (streamer-call this [x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13]))
+        (streamer-ref-call this [x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13]))
        (-invoke [this x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14]
-        (streamer-call this [x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14]))
+        (streamer-ref-call this [x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14]))
        (-invoke [this x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15]
-        (streamer-call this [x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15]))
+        (streamer-ref-call this [x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15]))
        (-invoke [this x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15 x16]
-        (streamer-call this [x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15 x16]))
+        (streamer-ref-call this [x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15 x16]))
        (-invoke [this x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15 x16 x17]
-        (streamer-call this [x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15 x16 x17]))
+        (streamer-ref-call this [x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15 x16 x17]))
        (-invoke [this x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15 x16 x17 x18]
-        (streamer-call this [x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15 x16 x17 x18]))
+        (streamer-ref-call this [x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15 x16 x17 x18]))
        (-invoke [this x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15 x16 x17 x18 x19]
-        (streamer-call this [x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15 x16 x17 x18 x19]))
+        (streamer-ref-call this [x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15 x16 x17 x18 x19]))
        (-invoke [this x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15 x16 x17 x18 x19 x20]
-        (streamer-call this [x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15 x16 x17 x18 x19 x20]))
+        (streamer-ref-call this [x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15 x16 x17 x18 x19 x20]))
        (-invoke [this x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15 x16 x17 x18 x19 x20 args]
-        (streamer-call this (into [x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15 x16 x17 x18 x19 x20] args)))]
+        (streamer-ref-call this (into [x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15 x16 x17 x18 x19 x20] args)))]
 
       :cljd
       [IFn
        (-invoke [this]
-        (streamer-call this []))
+        (streamer-ref-call this []))
        (-invoke [this x]
-        (streamer-call this [x]))
+        (streamer-ref-call this [x]))
        (-invoke [this x1 x2]
-        (streamer-call this [x1 x2]))
+        (streamer-ref-call this [x1 x2]))
        (-invoke [this x1 x2 x3]
-        (streamer-call this [x1 x2 x3]))
+        (streamer-ref-call this [x1 x2 x3]))
        (-invoke [this x1 x2 x3 x4]
-        (streamer-call this [x1 x2 x3 x4]))
+        (streamer-ref-call this [x1 x2 x3 x4]))
        (-invoke [this x1 x2 x3 x4 x5]
-        (streamer-call this [x1 x2 x3 x4 x5]))
+        (streamer-ref-call this [x1 x2 x3 x4 x5]))
        (-invoke [this x1 x2 x3 x4 x5 x6]
-        (streamer-call this [x1 x2 x3 x4 x5 x6]))
+        (streamer-ref-call this [x1 x2 x3 x4 x5 x6]))
        (-invoke [this x1 x2 x3 x4 x5 x6 x7]
-        (streamer-call this [x1 x2 x3 x4 x5 x6 x7]))
+        (streamer-ref-call this [x1 x2 x3 x4 x5 x6 x7]))
        (-invoke [this x1 x2 x3 x4 x5 x6 x7 x8]
-        (streamer-call this [x1 x2 x3 x4 x5 x6 x7 x8]))
+        (streamer-ref-call this [x1 x2 x3 x4 x5 x6 x7 x8]))
        (-invoke [this x1 x2 x3 x4 x5 x6 x7 x8 x9]
-        (streamer-call this [x1 x2 x3 x4 x5 x6 x7 x8 x9]))
+        (streamer-ref-call this [x1 x2 x3 x4 x5 x6 x7 x8 x9]))
        (-invoke-more [this x1 x2 x3 x4 x5 x6 x7  x8 x9 rest]
-         (streamer-call this (into [x1 x2 x3 x4 x5 x6 x7 x8 x9] rest)))
+         (streamer-ref-call this (into [x1 x2 x3 x4 x5 x6 x7 x8 x9] rest)))
        (-apply [this more]
-         (streamer-call this more))]
-   
+         (streamer-ref-call this more))]
+
       :clj
       [Closeable
        (close
          [this]
          (b/dispose! this))
-       
+
        IFn
        (invoke
          [this]
-         (streamer-call this []))
+         (streamer-ref-call this []))
        (invoke
          [this x]
-         (streamer-call this [x]))
+         (streamer-ref-call this [x]))
        (invoke
          [this x1 x2]
-         (streamer-call this [x1 x2]))
+         (streamer-ref-call this [x1 x2]))
        (invoke
          [this x1 x2 x3]
-         (streamer-call this [x1 x2 x3]))
+         (streamer-ref-call this [x1 x2 x3]))
        (invoke
          [this x1 x2 x3 x4]
-         (streamer-call this [x1 x2 x3 x4]))
+         (streamer-ref-call this [x1 x2 x3 x4]))
        (invoke
          [this x1 x2 x3 x4 x5]
-         (streamer-call this [x1 x2 x3 x4 x5]))
+         (streamer-ref-call this [x1 x2 x3 x4 x5]))
        (invoke
          [this x1 x2 x3 x4 x5 x6]
-         (streamer-call this [x1 x2 x3 x4 x5 x6]))
+         (streamer-ref-call this [x1 x2 x3 x4 x5 x6]))
        (invoke
          [this x1 x2 x3 x4 x5 x6 x7]
-         (streamer-call this [x1 x2 x3 x4 x5 x6 x7]))
+         (streamer-ref-call this [x1 x2 x3 x4 x5 x6 x7]))
        (invoke
          [this x1 x2 x3 x4 x5 x6 x7 x8]
-         (streamer-call this [x1 x2 x3 x4 x5 x6 x7 x8]))
+         (streamer-ref-call this [x1 x2 x3 x4 x5 x6 x7 x8]))
        (invoke
          [this x1 x2 x3 x4 x5 x6 x7 x8 x9]
-         (streamer-call this [x1 x2 x3 x4 x5 x6 x7 x8 x9]))
+         (streamer-ref-call this [x1 x2 x3 x4 x5 x6 x7 x8 x9]))
        (invoke
          [this x1 x2 x3 x4 x5 x6 x7 x8 x9 x10]
-         (streamer-call this [x1 x2 x3 x4 x5 x6 x7 x8 x9 x10]))
+         (streamer-ref-call this [x1 x2 x3 x4 x5 x6 x7 x8 x9 x10]))
        (invoke
          [this x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11]
-         (streamer-call this [x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11]))
+         (streamer-ref-call this [x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11]))
        (invoke
          [this x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12]
-         (streamer-call this [x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12]))
+         (streamer-ref-call this [x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12]))
        (invoke
          [this x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13]
-         (streamer-call this [x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13]))
+         (streamer-ref-call this [x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13]))
        (invoke
          [this x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14]
-         (streamer-call this [x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14]))
+         (streamer-ref-call this [x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14]))
        (invoke
          [this x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15]
-         (streamer-call this [x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15]))
+         (streamer-ref-call this [x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15]))
        (invoke
          [this x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15 x16]
-         (streamer-call this [x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15 x16]))
+         (streamer-ref-call this [x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15 x16]))
        (invoke
          [this x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15 x16 x17]
-         (streamer-call this [x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15 x16 x17]))
+         (streamer-ref-call this [x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15 x16 x17]))
        (invoke
          [this x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15 x16 x17 x18]
-         (streamer-call this [x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15 x16 x17 x18]))
+         (streamer-ref-call this [x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15 x16 x17 x18]))
        (invoke
          [this x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15 x16 x17 x18 x19]
-         (streamer-call this [x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15 x16 x17 x18 x19]))
+         (streamer-ref-call this [x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15 x16 x17 x18 x19]))
        (invoke
          [this x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15 x16 x17 x18 x19 x20]
-         (streamer-call this [x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15 x16 x17 x18 x19 x20]))
+         (streamer-ref-call this [x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15 x16 x17 x18 x19 x20]))
        (invoke
          [this x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15 x16 x17 x18 x19 x20 args]
-         (streamer-call this (into [x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15 x16 x17 x18 x19 x20] args)))
+         (streamer-ref-call this (into [x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15 x16 x17 x18 x19 x20] args)))
        (applyTo
          [this args]
-         (streamer-call this args))])
+         (streamer-ref-call this args))])
   Dispose
-  (-dispose! [this] (streamer-dispose! this)))
+  (-dispose! [this] (b/dispose! streamer)))
 
 (deftype ^:private StreamRef
-  [^Streamer streamer args-vec]
+  [^Streamer streamer context args-vec]
   #?@(:cljs
       [IWatchable
        (-notify-watches
@@ -193,17 +197,17 @@
        (-remove-watch
          [this k]
          (remove-watch! this k))
-       
+
        IEquiv
        (-equiv
          [this other]
          (stream-ref-equiv this other))
-       
+
        IHash
        (-hash
          [this]
          (stream-ref-hash this))
-       
+
        IDeref
        (-deref
          [this]
@@ -234,22 +238,22 @@
        (-unsubscribe
          [this sub]
          (remove-watch this sub))
-       
+
        IEquiv
        (-equiv
          [this other]
          (stream-ref-equiv this other))
-       
+
        IHash
        (-hash
          [this]
          (stream-ref-hash this))
-       
+
        IDeref
        (-deref
          [this]
          (stream-ref-deref this))]
-   
+
       :clj
       [Object
        (hashCode
@@ -258,21 +262,21 @@
        (equals
          [this other]
          (stream-ref-equiv this other))
-       
+
        IRef
        (getValidator
          [this]
          nil)
        (getWatches
          [this]
-         (get-in @(.-!state streamer) [::stream-states args-vec ::watches] {}))
+         (get-in @(.-!state streamer) [::stream-states [context args-vec] ::watches] {}))
        (addWatch
          [this k f]
          (add-watch! this k f))
        (removeWatch
          [this k]
          (remove-watch! this k))
-       
+
        IDeref
        (deref
          [this]
@@ -280,43 +284,48 @@
 
 (defn- notify-watches!
   [^StreamRef stream-ref old-val new-val]
-  (let [!state (-> stream-ref ^Streamer (.-streamer) .-!state)]
-    (doseq [[watch-k watch-fn] (get-in @!state [::stream-states (.-args-vec stream-ref) ::watches])]
+  (let [!state (-> stream-ref ^Streamer (.-streamer) .-!state)
+        state-key [(.-context stream-ref) (.-args-vec stream-ref)]]
+    (doseq [[watch-k watch-fn] (get-in @!state [::stream-states state-key ::watches])]
       (m
         (watch-fn watch-k stream-ref old-val new-val)
-        :catch b/err-any err 
+        :catch b/err-any err
         (log :error :ex err ::stream-args (.-args-vec stream-ref) :watch-k watch-k)))))
 
 (defn- push-fn
-  [!state stream-args-vec]
+  [!state stream-key]
   (fn push! [x]
     (swap! !state
       (fn [state]
-        (if-not (get-in state [::stream-states stream-args-vec])
+        (if-not (get-in state [::stream-states stream-key])
           state
-          (assoc-in state [::pending-stream-values stream-args-vec] x))))))
+          (assoc-in state [::pending-stream-values stream-key] x))))))
 
 (defn- create-config
   [^StreamRef stream-ref]
   (let
     [args (.-args-vec stream-ref)
+     context (.-context stream-ref)
      [first-arg & rest-args] args
-     streamer ^Streamer (.-streamer stream-ref)]
+     streamer ^Streamer (.-streamer stream-ref)
+     streamer-ref (->StreamerRef streamer context)]
     (merge
       {::extra-lives (or (-> streamer .-opts :extra-lives) 1)}
       (if (satisfies? StreamSpec first-arg)
-        (-resolve-spec first-arg streamer rest-args)
-        (apply (.-handler streamer) args)))))
+        (-resolve-spec first-arg streamer-ref rest-args)
+        (apply (.-handler streamer) context args)))))
 
 (defn- add-watch!
   [^StreamRef stream-ref k f]
   (let
     [streamer ^Streamer (.-streamer stream-ref)
      !state (.-!state streamer)
+     context (.-context stream-ref)
      args-vec (.-args-vec stream-ref)
+     state-key [context args-vec]
 
      [old-state new-state]
-     (swap-vals! !state update-in [::stream-states args-vec]
+     (swap-vals! !state update-in [::stream-states state-key]
        (fn [{old-watches ::watches :as stream-state}]
          (let
            [new-watches (assoc old-watches k f)]
@@ -328,7 +337,7 @@
 
              :else
              (let
-               [default-extra-lives 
+               [default-extra-lives
                 (-> stream-ref ^Streamer (.-streamer) .-opts :extra-lives (or 1))
 
                 config
@@ -338,44 +347,47 @@
                  ::config config
                  ::lives-remaining (::extra-lives config)
                  ::watches new-watches))))))
-     
-     old-stream-state (get-in old-state [::stream-states args-vec])
-     new-stream-state (get-in new-state [::stream-states args-vec])]
+
+     old-stream-state (get-in old-state [::stream-states state-key])
+     new-stream-state (get-in new-state [::stream-states state-key])]
 
     (when-not old-stream-state
       (let [boot-fn (get-in new-stream-state [::config ::boot])]
         (when (ifn? boot-fn)
           (boot-fn
-            {:push! (push-fn !state (.-args-vec stream-ref))
-             :stream streamer}))))
+            {:push! (push-fn !state state-key)
+             :stream (->StreamerRef streamer context)}))))
     nil))
 
 (defn- remove-watch!
   [^StreamRef stream-ref k]
-  (let [!state (-> stream-ref .-streamer .-!state)]
+  (let [!state (-> stream-ref .-streamer .-!state)
+        state-key [(.-context stream-ref) (.-args-vec stream-ref)]]
     (swap! !state
       (fn [state]
-        (if-not (contains? (get-in state [::stream-states (.-args-vec stream-ref) ::watches]) k)
+        (if-not (contains? (get-in state [::stream-states state-key ::watches]) k)
           state
-          (update-in state [::stream-states (.-args-vec stream-ref) ::watches] dissoc k)))))
+          (update-in state [::stream-states state-key ::watches] dissoc k)))))
   nil)
 
 (defn- stream-ref-equiv
   [^StreamRef stream-ref other]
   (and (instance? StreamRef other)
     (= (.-args-vec stream-ref) (.-args-vec ^StreamRef other))
+    (= (.-context stream-ref) (.-context ^StreamRef other))
     (= (.-streamer stream-ref) (.-streamer ^StreamRef other))))
 
 (defn- stream-ref-hash
   [^StreamRef stream-ref]
-  (hash (.-args-vec stream-ref)))
+  (hash [(.-args-vec stream-ref) (.-context stream-ref)]))
 
 (defn- stream-ref-deref
   [^StreamRef stream-ref]
   (let
     [streamer ^Streamer (.-streamer stream-ref)
      !state (.-!state streamer)
-     stream-state (get-in @!state [::stream-states (.-args-vec stream-ref)] {})
+     state-key [(.-context stream-ref) (.-args-vec stream-ref)]
+     stream-state (get-in @!state [::stream-states state-key] {})
      stream-value (get stream-state ::value ::not-found)]
     (if (not= stream-value ::not-found)
       stream-value
@@ -384,8 +396,8 @@
               (create-config stream-ref))]
         (cond
           (ifn? snap-fn)
-          (snap-fn {:stream streamer})
-          
+          (snap-fn {:stream (->StreamerRef streamer (.-context stream-ref))})
+
           :else
           default-value)))))
 
@@ -429,9 +441,10 @@
   (let
     [[{dirty-streams ::dirty-streams} _]
      (swap-vals! (.-!state streamer) assoc ::dirty-streams {})]
-    (doseq [[args-vec stream-state] dirty-streams]
+    (doseq [[state-key stream-state] dirty-streams
+            :let [[context args-vec] state-key]]
       (notify-watches!
-        (->StreamRef streamer args-vec)
+        (->StreamRef streamer context args-vec)
         (::old-value stream-state)
         (::value stream-state)))
     (when (seq (::pending-stream-values @(.-!state streamer)))
@@ -511,28 +524,30 @@
     [[{dirty-streams ::dirty-streams killed-streams ::killed-streams} _]
      (swap-vals! (.-!state streamer) assoc ::dirty-streams {} ::killed-streams {})]
     (doseq
-      [[args-vec stream-state] killed-streams
-       :let [kill-fn (get-in stream-state [::config ::kill])]
+      [[state-key stream-state] killed-streams
+       :let [[context args-vec] state-key
+             kill-fn (get-in stream-state [::config ::kill])]
        :when (ifn? kill-fn)]
       (m
         (kill-fn {})
         :catch b/err-any err
         (log :error :ex err ::stream-args args-vec)))
     (doseq
-      [[args-vec stream-state] dirty-streams]
+      [[state-key stream-state] dirty-streams
+       :let [[context args-vec] state-key]]
       (notify-watches!
-        (->StreamRef streamer args-vec)
+        (->StreamRef streamer context args-vec)
         (::old-value stream-state)
         (::value stream-state)))
     (when (seq (::pending-stream-values (.-!state streamer)))
       (flush-secondary! streamer opts))
-    
+
     (when-some [after-flush (:after-flush opts)]
       (after-flush))))
 
-(defn- streamer-call
-  [^Streamer streamer args]
-  (->StreamRef streamer (vec args)))
+(defn- streamer-ref-call
+  [^StreamerRef streamer-ref args]
+  (->StreamRef (.-streamer streamer-ref) (.-context streamer-ref) (vec args)))
 
 (defn- streamer-dispose!
   [^Streamer streamer]
@@ -548,7 +563,7 @@
 Creates a streamer.  Calling the streamer returns a stream reference,
 which can be watched and derefed like a built-in reference type.
 
-The `handler` takes all args passed to the streamer call, and should
+The `handler` takes the context and all args passed to the streamer call, and should
 return a map of `{::boot boot-fn ::kill ?kill-fn ::snap ?snap-fn ::extra-lives ?extra-lives ::default ?default-value}`.
 
 Options are:
@@ -567,17 +582,27 @@ Options are:
           stop-fn (fn [] (b/dispose! flush-clock))]
          [flush-clock (->Streamer handler !state opts flush-clock stop-fn)]))]
     (b/notifier-listen flush-signal streamer #(flush! streamer opts))
-    streamer))
+    (->StreamerRef streamer {})))
+
+(defn with-extra-context
+  "Returns a new StreamerRef with the given context merged into the current context."
+  [^StreamerRef streamer-ref extra-context]
+  (->StreamerRef (.-streamer streamer-ref) (merge (.-context streamer-ref) extra-context)))
+
+(defn with-replace-context
+  "Returns a new StreamerRef with the context replaced by the given context."
+  [^StreamerRef streamer-ref new-context]
+  (->StreamerRef (.-streamer streamer-ref) new-context))
 
 (defn args-spec
   [& args]
   (reify
     StreamSpec
     (-resolve-spec
-      [_ streamer extra-args]
+      [_ streamer-ref extra-args]
       (if (satisfies? StreamSpec (first args))
-        (-resolve-spec (first args) streamer (concat (rest args) extra-args))
-        (apply (.-handler ^Streamer streamer) (concat args extra-args))))))
+        (-resolve-spec (first args) streamer-ref (concat (rest args) extra-args))
+        (apply (.-handler ^Streamer (.-streamer streamer-ref)) (.-context streamer-ref) (concat args extra-args))))))
 
 (defn derive-spec
   [deps f & {:keys [on-boot on-kill extra-lives]}]
@@ -585,10 +610,11 @@ Options are:
   (reify
     StreamSpec
     (-resolve-spec
-      [_ streamer args]
+      [_ streamer-ref args]
       (let
-        [deps (if (fn? deps) (apply deps args) deps)
-         deps (update-vals deps #(apply streamer %))
+        [context (.-context streamer-ref)
+         deps (if (fn? deps) (apply deps context args) deps)
+         deps (update-vals deps #(apply streamer-ref %))
          !deps-vals (volatile! {})
          !derived (atom ::placeholder)
          watch-key (gensym)]
@@ -600,13 +626,13 @@ Options are:
              (fn [_ _ old-val new-val]
                (when (not= old-val new-val)
                  (when (and (vector? old-val) (-> old-val meta :stream))
-                   (remove-watch (apply streamer old-val) watch-key))
+                   (remove-watch (apply streamer-ref old-val) watch-key))
                  (cond
                    (and (vector? new-val) (-> new-val meta :stream))
-                   (add-watch (apply streamer new-val) watch-key
+                   (add-watch (apply streamer-ref new-val) watch-key
                      (fn [_ _ _ v]
                        (push! v)))
-                   
+
                    :else
                    (push! new-val)))))
            (let
@@ -632,7 +658,7 @@ Options are:
              [derived @!derived
               derived (if (= derived ::placeholder) (apply f (update-vals deps deref) args) derived)]
              (if (and (vector? derived) (-> derived meta :stream))
-               @(apply streamer derived)
+               @(apply streamer-ref derived)
                derived)))
 
          ::kill
@@ -650,7 +676,7 @@ Options are:
         !sync (atom nil)
         !flush-count (atom 0)
         stream (streamer
-                 (fn [k & args]
+                 (fn [ctx k & args]
                    (case k
                      :counter
                      (let [!counter (atom (first args))]
