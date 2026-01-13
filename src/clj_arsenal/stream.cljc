@@ -23,8 +23,7 @@
   ^:private stream-ref-equiv ^:private stream-ref-hash ^:private stream-ref-deref
   ^:private streamer-ref-call ^:private streamer-dispose!)
 
-(defprotocol StreamSpec
-  (^:private -resolve-spec [ss streamer-ref args]))
+
 
 (deftype ^:private Streamer [handler !state opts flush-signal stop-fn]
   Dispose
@@ -306,14 +305,10 @@
   (let
     [args (.-args-vec stream-ref)
      context (.-context stream-ref)
-     [first-arg & rest-args] args
-     streamer ^Streamer (.-streamer stream-ref)
-     streamer-ref (->StreamerRef streamer context)]
+     streamer ^Streamer (.-streamer stream-ref)]
     (merge
       {::extra-lives (or (-> streamer .-opts :extra-lives) 1)}
-      (if (satisfies? StreamSpec first-arg)
-        (-resolve-spec first-arg streamer-ref rest-args)
-        (apply (.-handler streamer) context args)))))
+      (apply (.-handler streamer) context args))))
 
 (defn- add-watch!
   [^StreamRef stream-ref k f]
@@ -594,81 +589,9 @@ Options are:
   [^StreamerRef streamer-ref new-context]
   (->StreamerRef (.-streamer streamer-ref) new-context))
 
-(defn args-spec
-  [& args]
-  (reify
-    StreamSpec
-    (-resolve-spec
-      [_ streamer-ref extra-args]
-      (if (satisfies? StreamSpec (first args))
-        (-resolve-spec (first args) streamer-ref (concat (rest args) extra-args))
-        (apply (.-handler ^Streamer (.-streamer streamer-ref)) (.-context streamer-ref) (concat args extra-args))))))
 
-(defn derive-spec
-  [deps f & {:keys [on-boot on-kill extra-lives]}]
-  {:pre [(or (map? deps) (fn? deps))]}
-  (reify
-    StreamSpec
-    (-resolve-spec
-      [_ streamer-ref args]
-      (let
-        [context (.-context streamer-ref)
-         deps (if (fn? deps) (apply deps context args) deps)
-         deps (update-vals deps #(apply streamer-ref %))
-         !deps-vals (volatile! {})
-         !derived (atom ::placeholder)
-         watch-key (gensym)]
-        {::extra-lives extra-lives
 
-         ::boot
-         (fn [{:keys [push!]}]
-           (add-watch !derived watch-key
-             (fn [_ _ old-val new-val]
-               (when (not= old-val new-val)
-                 (when (and (vector? old-val) (-> old-val meta :stream))
-                   (remove-watch (apply streamer-ref old-val) watch-key))
-                 (cond
-                   (and (vector? new-val) (-> new-val meta :stream))
-                   (add-watch (apply streamer-ref new-val) watch-key
-                     (fn [_ _ _ v]
-                       (push! v)))
 
-                   :else
-                   (push! new-val)))))
-           (let
-             [dep-vals (update-vals deps deref)
-              derived (apply f dep-vals args)]
-             (vreset! !deps-vals dep-vals)
-             (reset! !derived derived))
-
-           (doseq [[k w] deps]
-             (add-watch w watch-key
-               (fn [_ _ old-val new-val]
-                 (when (not= old-val new-val)
-                   (let
-                     [deps-vals (vswap! !deps-vals assoc k new-val)
-                      derived (apply f deps-vals args)]
-                     (reset! !derived derived))))))
-           (when (ifn? on-boot)
-             (apply on-boot @!deps-vals args)))
-
-         ::snap
-         (fn [_]
-           (let
-             [derived @!derived
-              derived (if (= derived ::placeholder) (apply f (update-vals deps deref) args) derived)]
-             (if (and (vector? derived) (-> derived meta :stream))
-               @(apply streamer-ref derived)
-               derived)))
-
-         ::kill
-         (fn [_]
-           (doseq [w (vals deps)]
-             (remove-watch w watch-key))
-           (reset! !derived nil)
-           (remove-watch !derived watch-key)
-           (when (ifn? on-kill)
-             (apply on-kill @!deps-vals args)))}))))
 
 (check ::simple
   (let [inc-signal (b/signal)
