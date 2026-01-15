@@ -23,8 +23,6 @@
   ^:private stream-ref-equiv ^:private stream-ref-hash ^:private stream-ref-deref
   ^:private streamer-ref-call ^:private streamer-dispose!)
 
-
-
 (deftype ^:private Streamer [handler !state opts flush-signal stop-fn]
   Dispose
   (-dispose! [this] (streamer-dispose! this)))
@@ -283,7 +281,8 @@
 
 (defn- notify-watches!
   [^StreamRef stream-ref old-val new-val]
-  (let [!state (-> stream-ref ^Streamer (.-streamer) .-!state)
+  (let [^Streamer streamer (.-streamer stream-ref)
+        !state (.-!state streamer)
         state-key [(.-context stream-ref) (.-args-vec stream-ref)]]
     (doseq [[watch-k watch-fn] (get-in @!state [::stream-states state-key ::watches])]
       (m
@@ -337,9 +336,12 @@
 
                 config
                 (update (create-config stream-ref) ::extra-lives
-                  #(or % default-extra-lives))]
+                  #(or % default-extra-lives))
+                
+                kill-signal (b/signal)]
                (assoc stream-state
                  ::config config
+                 ::kill-signal kill-signal
                  ::lives-remaining (::extra-lives config)
                  ::watches new-watches))))))
 
@@ -351,6 +353,7 @@
         (when (ifn? boot-fn)
           (boot-fn
             {:push! (push-fn !state state-key)
+             :kill-signal (get new-stream-state ::kill-signal)
              :stream (->StreamerRef streamer context)}))))
     nil))
 
@@ -521,12 +524,18 @@
     (doseq
       [[state-key stream-state] killed-streams
        :let [[context args-vec] state-key
-             kill-fn (get-in stream-state [::config ::kill])]
-       :when (ifn? kill-fn)]
-      (m
-        (kill-fn {})
-        :catch b/err-any err
-        (log :error :ex err ::stream-args args-vec)))
+             kill-fn (get-in stream-state [::config ::kill])
+             kill-signal (get stream-state ::kill-signal)]]
+      (when (ifn? kill-fn)
+        (m
+          (kill-fn {})
+          :catch b/err-any err
+          (log :error :ex err ::stream-args args-vec)))
+      (when (ifn? kill-signal)
+        (m
+          (kill-signal)
+          :catch b/err-any err
+          (log :error :ex err ::stream-args args-vec))))
     (doseq
       [[state-key stream-state] dirty-streams
        :let [[context args-vec] state-key]]
@@ -590,9 +599,6 @@ Options are:
   (->StreamerRef (.-streamer streamer-ref) new-context))
 
 
-
-
-
 (check ::simple
   (let [inc-signal (b/signal)
         flush-signal (b/signal)
@@ -604,18 +610,18 @@ Options are:
                      :counter
                      (let [!counter (atom (first args))]
                        {::boot
-                        (fn [push!]
+                        (fn [{:keys [push!]}]
                           (push! @!counter)
                           (b/notifier-listen inc-signal ::listen
                             (fn []
                               (push! (swap! !counter inc)))))
 
                         ::kill
-                        (fn []
+                        (fn [_]
                           (b/notifier-unlisten inc-signal ::listen))
 
                         ::snap
-                        (fn []
+                        (fn [_]
                           @!counter)})))
                  :flush-signal flush-signal
                  :after-flush #(swap! !flush-count inc))
