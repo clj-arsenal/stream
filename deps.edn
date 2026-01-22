@@ -27,7 +27,7 @@
    :clj-arsenal.check/ns-include-re "clj-arsenal[.]stream([.].+)?"}}
 
  :clj-arsenal.build/meta
- {:version "0.0.3"
+ {:version "0.0.4"
   :name me.raystubbs.clj-arsenal/stream
   :license "The MIT License"
   :license-url "https://opensource.org/license/mit/"
