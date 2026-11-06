@@ -11,6 +11,9 @@
    #?@(:cljd
        []
 
+       :bb
+       []
+
        :clj
        [java.io.Closeable
        [clojure.lang IDeref IRef IFn]])))
@@ -28,7 +31,35 @@
   Dispose
   (-dispose! [this] (streamer-dispose! this)))
 
-(deftype ^:private StreamerRef [^Streamer streamer context]
+#?(:bb
+   (do
+     (defprotocol ^:private StreamerRefFields
+       (-streamer-ref-streamer [streamer-ref])
+       (-streamer-ref-context [streamer-ref]))
+
+     ;; bb's deftype can't implement IFn or Closeable, but its reify can do IFn.
+     (defn- ->StreamerRef
+       [streamer context]
+       (reify
+         StreamerRefFields
+         (-streamer-ref-streamer [_] streamer)
+         (-streamer-ref-context [_] context)
+
+         Dispose
+         (-dispose! [_] (b/dispose! streamer))
+
+         clojure.lang.IFn
+         (invoke [this] (streamer-ref-call this []))
+         (invoke [this x] (streamer-ref-call this [x]))
+         (invoke [this x1 x2] (streamer-ref-call this [x1 x2]))
+         (invoke [this x1 x2 x3] (streamer-ref-call this [x1 x2 x3]))
+         (invoke [this x1 x2 x3 x4] (streamer-ref-call this [x1 x2 x3 x4]))
+         (invoke [this x1 x2 x3 x4 x5] (streamer-ref-call this [x1 x2 x3 x4 x5]))
+         (invoke [this x1 x2 x3 x4 x5 x6] (streamer-ref-call this [x1 x2 x3 x4 x5 x6]))
+         (applyTo [this args] (streamer-ref-call this args)))))
+
+   :default
+   (deftype ^:private StreamerRef [^Streamer streamer context]
   #?@(:cljs
       [IFn
        (-invoke [this]
@@ -180,9 +211,30 @@
          [this args]
          (streamer-ref-call this args))])
   Dispose
-  (-dispose! [this] (b/dispose! streamer)))
+  (-dispose! [this] (b/dispose! streamer))))
 
-(deftype ^:private StreamRef
+#?(:bb
+   (do
+     (defprotocol ^:private StreamRefFields
+       (-stream-ref-streamer [stream-ref])
+       (-stream-ref-context [stream-ref])
+       (-stream-ref-args-vec [stream-ref]))
+
+     ;; clojure.core/add-watch needs IRef, which bb can't reify; use
+     ;; add-stream-watch and remove-stream-watch instead.
+     (defn- ->StreamRef
+       [streamer context args-vec]
+       (reify
+         StreamRefFields
+         (-stream-ref-streamer [_] streamer)
+         (-stream-ref-context [_] context)
+         (-stream-ref-args-vec [_] args-vec)
+
+         clojure.lang.IDeref
+         (deref [this] (stream-ref-deref this)))))
+
+   :default
+   (deftype ^:private StreamRef
   [^Streamer streamer context args-vec]
   #?@(:cljs
       [IWatchable
@@ -282,13 +334,31 @@
        IDeref
        (deref
          [this]
-         (stream-ref-deref this))]))
+         (stream-ref-deref this))])))
+
+#?(:bb
+   (do
+     (defn- streamer-ref-streamer [r] (-streamer-ref-streamer r))
+     (defn- streamer-ref-context [r] (-streamer-ref-context r))
+     (defn- stream-ref-streamer [r] (-stream-ref-streamer r))
+     (defn- stream-ref-context [r] (-stream-ref-context r))
+     (defn- stream-ref-args-vec [r] (-stream-ref-args-vec r))
+     (defn- stream-ref? [x] (satisfies? StreamRefFields x)))
+
+   :default
+   (do
+     (defn- streamer-ref-streamer [^StreamerRef r] (.-streamer r))
+     (defn- streamer-ref-context [^StreamerRef r] (.-context r))
+     (defn- stream-ref-streamer [^StreamRef r] (.-streamer r))
+     (defn- stream-ref-context [^StreamRef r] (.-context r))
+     (defn- stream-ref-args-vec [^StreamRef r] (.-args-vec r))
+     (defn- stream-ref? [x] (instance? StreamRef x))))
 
 (defn- notify-watches!
-  ([^StreamRef stream-ref old-val new-val]
-   (let [^Streamer streamer (.-streamer stream-ref)
-         context (.-context stream-ref)
-         args-vec (.-args-vec stream-ref)
+  ([stream-ref old-val new-val]
+   (let [^Streamer streamer (stream-ref-streamer stream-ref)
+         context (stream-ref-context stream-ref)
+         args-vec (stream-ref-args-vec stream-ref)
          state @(.-!state streamer)
          config (or (get-in state [::stream-configs [context args-vec]])
                     (create-config stream-ref))
@@ -312,11 +382,11 @@
           (assoc-in state [::pending-stream-values stream-key] x))))))
 
 (defn- create-config
-  [^StreamRef stream-ref]
+  [stream-ref]
   (let
-    [args (.-args-vec stream-ref)
-     context (.-context stream-ref)
-     streamer ^Streamer (.-streamer stream-ref)
+    [args (stream-ref-args-vec stream-ref)
+     context (stream-ref-context stream-ref)
+     streamer ^Streamer (stream-ref-streamer stream-ref)
      config (apply (.-handler streamer) context args)
      default-extra-lives (-> streamer .-opts :extra-lives (or 1))]
     (merge
@@ -325,12 +395,12 @@
       config)))
 
 (defn- add-watch!
-  [^StreamRef stream-ref k f]
+  [stream-ref k f]
   (let
-    [streamer ^Streamer (.-streamer stream-ref)
+    [streamer ^Streamer (stream-ref-streamer stream-ref)
      !state (.-!state streamer)
-     context (.-context stream-ref)
-     args-vec (.-args-vec stream-ref)
+     context (stream-ref-context stream-ref)
+     args-vec (stream-ref-args-vec stream-ref)
      state-key [context args-vec]
 
      wrapped-f (fn [watch-k _ old-val new-val]
@@ -373,10 +443,10 @@
     nil))
 
 (defn- remove-watch!
-  [^StreamRef stream-ref k]
-  (let [!state (-> stream-ref ^Streamer (.-streamer) .-!state)
-        context (.-context stream-ref)
-        args-vec (.-args-vec stream-ref)
+  [stream-ref k]
+  (let [!state (.-!state ^Streamer (stream-ref-streamer stream-ref))
+        context (stream-ref-context stream-ref)
+        args-vec (stream-ref-args-vec stream-ref)
         state-key [context args-vec]]
     (swap! !state
       (fn [state]
@@ -387,24 +457,34 @@
             (update-in state [::stream-states stream-key ::watches] dissoc k))))))
   nil)
 
+#?(:bb
+   (do
+     (defn add-stream-watch
+       [stream-ref k f]
+       (add-watch! stream-ref k f))
+
+     (defn remove-stream-watch
+       [stream-ref k]
+       (remove-watch! stream-ref k))))
+
 (defn- stream-ref-equiv
-  [^StreamRef stream-ref other]
-  (and (instance? StreamRef other)
-    (= (.-args-vec stream-ref) (.-args-vec ^StreamRef other))
-    (= (.-context stream-ref) (.-context ^StreamRef other))
-    (= (.-streamer stream-ref) (.-streamer ^StreamRef other))))
+  [stream-ref other]
+  (and (stream-ref? other)
+    (= (stream-ref-args-vec stream-ref) (stream-ref-args-vec other))
+    (= (stream-ref-context stream-ref) (stream-ref-context other))
+    (= (stream-ref-streamer stream-ref) (stream-ref-streamer other))))
 
 (defn- stream-ref-hash
-  [^StreamRef stream-ref]
-  (hash [(.-args-vec stream-ref) (.-context stream-ref)]))
+  [stream-ref]
+  (hash [(stream-ref-args-vec stream-ref) (stream-ref-context stream-ref)]))
 
 (defn- stream-ref-deref
-  [^StreamRef stream-ref]
+  [stream-ref]
   (let
-    [streamer ^Streamer (.-streamer stream-ref)
+    [streamer ^Streamer (stream-ref-streamer stream-ref)
      !state (.-!state streamer)
-     context (.-context stream-ref)
-     args-vec (.-args-vec stream-ref)
+     context (stream-ref-context stream-ref)
+     args-vec (stream-ref-args-vec stream-ref)
      state-key [context args-vec]
      state @!state
      config (or (get-in state [::stream-configs state-key])
@@ -419,7 +499,7 @@
               config)]
         (cond
           (ifn? snap-fn)
-          (snap-fn {:stream (->StreamerRef streamer (.-context stream-ref))})
+          (snap-fn {:stream (->StreamerRef streamer (stream-ref-context stream-ref))})
 
           :else
           default-value)))))
@@ -578,8 +658,8 @@
       (after-flush))))
 
 (defn- streamer-ref-call
-  [^StreamerRef streamer-ref args]
-  (->StreamRef (.-streamer streamer-ref) (.-context streamer-ref) (vec args)))
+  [streamer-ref args]
+  (->StreamRef (streamer-ref-streamer streamer-ref) (streamer-ref-context streamer-ref) (vec args)))
 
 (defn- streamer-dispose!
   [^Streamer streamer]
@@ -618,13 +698,13 @@ Options are:
 
 (defn with-extra-context
   "Returns a new StreamerRef with the given context merged into the current context."
-  [^StreamerRef streamer-ref extra-context]
-  (->StreamerRef (.-streamer streamer-ref) (merge (.-context streamer-ref) extra-context)))
+  [streamer-ref extra-context]
+  (->StreamerRef (streamer-ref-streamer streamer-ref) (merge (streamer-ref-context streamer-ref) extra-context)))
 
 (defn with-replace-context
   "Returns a new StreamerRef with the context replaced by the given context."
-  [^StreamerRef streamer-ref new-context]
-  (->StreamerRef (.-streamer streamer-ref) new-context))
+  [streamer-ref new-context]
+  (->StreamerRef (streamer-ref-streamer streamer-ref) new-context))
 
 
 (check ::simple
@@ -657,7 +737,7 @@ Options are:
 
     (expect = @s 0)
 
-    (add-watch s ::watch
+    (#?(:bb add-stream-watch :default add-watch) s ::watch
       (fn [_ _ old-val new-val]
         (reset! !sync [old-val new-val])))
 
@@ -694,7 +774,7 @@ Options are:
     (expect = @s1 1)
     (expect = @s2 2)
 
-    (add-watch s1 ::w1 (fn [& _]))
+    (#?(:bb add-stream-watch :default add-watch) s1 ::w1 (fn [& _]))
 
     (expect = @s1 1)
     (expect = @s2 1)))
